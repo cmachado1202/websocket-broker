@@ -1,61 +1,74 @@
 const WebSocket = require('ws');
 
-const PORT = process.env.PORT || 8080;
-const server = new WebSocket.Server({ port: PORT });
+const wss = new WebSocket.Server({ port: process.env.PORT || 8080 });
 
 let tabletSocket = null;
 let visorSocket = null;
 
-console.log(`Servidor WebSocket iniciado en el puerto ${PORT}`);
+console.log('Servidor WebSocket iniciado y esperando conexiones...');
 
-server.on('connection', (ws) => {
-  console.log('Cliente nuevo conectado.');
+wss.on('connection', (ws) => {
+    console.log('Cliente conectado.');
 
-  ws.on('message', (message) => {
-    // Intenta parsear el mensaje para la identificación
-    try {
-        const data = JSON.parse(message);
-        if (data.type === 'identify') {
-            if (data.client === 'tablet') {
-                console.log('Tablet identificada.');
-                tabletSocket = ws;
-                // Asigna el socket opuesto para reenvío
-                ws.oppositeSocket = visorSocket; 
-                if (visorSocket) visorSocket.oppositeSocket = ws;
-            } else if (data.client === 'visor') {
-                console.log('Visor identificado.');
-                visorSocket = ws;
-                // Asigna el socket opuesto para reenvío
-                ws.oppositeSocket = tabletSocket;
-                if (tabletSocket) tabletSocket.oppositeSocket = ws;
+    ws.on('message', (message) => {
+        try {
+            // Primero, intentamos parsear como JSON para la identificación
+            const data = JSON.parse(message);
+
+            if (data.type === 'identify') {
+                if (data.client === 'tablet') {
+                    tabletSocket = ws;
+                    console.log('>>> Tablet identificada y registrada.');
+                    // Informar al visor si ya está conectado
+                    if (visorSocket && visorSocket.readyState === WebSocket.OPEN) {
+                        visorSocket.send(JSON.stringify({ type: 'status', message: 'Tablet Conectada' }));
+                    }
+                } else if (data.client === 'visor') {
+                    visorSocket = ws;
+                    console.log('>>> Visor identificado y registrado.');
+                     // Informar al visor si la tablet ya está conectada
+                    if (tabletSocket && tabletSocket.readyState === WebSocket.OPEN) {
+                        visorSocket.send(JSON.stringify({ type: 'status', message: 'Tablet ya estaba Conectada' }));
+                    }
+                }
+                return; // Mensaje de identificación procesado
             }
-            return;
+
+            // Si el mensaje es un comando de TAP/SWIPE, debe venir del visor
+            if (data.type === 'tap_relative' || data.type === 'swipe_relative') {
+                if (tabletSocket && tabletSocket.readyState === WebSocket.OPEN) {
+                    // Reenviamos el comando SOLO a la tablet
+                    tabletSocket.send(JSON.stringify(data));
+                }
+            }
+
+        } catch (e) {
+            // Si no es JSON, asumimos que es una imagen (un Blob)
+            // Esto debe venir de la tablet
+            if (visorSocket && visorSocket.readyState === WebSocket.OPEN) {
+                // Reenviamos la imagen SOLO al visor
+                visorSocket.send(message);
+            }
         }
-    } catch (e) {
-        // Si no es JSON, es un frame de video o un comando. Lo reenviamos.
-    }
+    });
 
-    // Lógica de reenvío simple
-    if (ws.oppositeSocket) {
-        ws.oppositeSocket.send(message);
-    }
-  });
+    ws.on('close', () => {
+        console.log('Cliente desconectado.');
+        // Limpiamos la referencia al socket que se desconectó
+        if (ws === tabletSocket) {
+            tabletSocket = null;
+            console.log('>>> Tablet desconectada.');
+            if (visorSocket && visorSocket.readyState === WebSocket.OPEN) {
+                visorSocket.send(JSON.stringify({ type: 'status', message: 'Tablet Desconectada' }));
+            }
+        }
+        if (ws === visorSocket) {
+            visorSocket = null;
+            console.log('>>> Visor desconectado.');
+        }
+    });
 
-  ws.on('close', () => {
-    console.log('Cliente desconectado.');
-    if (ws === tabletSocket) {
-      tabletSocket = null;
-      if (visorSocket) visorSocket.oppositeSocket = null;
-      console.log('La tablet se ha desconectado.');
-    }
-    if (ws === visorSocket) {
-      visorSocket = null;
-      if (tabletSocket) tabletSocket.oppositeSocket = null;
-      console.log('El visor se ha desconectado.');
-    }
-  });
+    ws.on('error', (error) => {
+        console.error('Error en WebSocket:', error);
+    });
 });
-
-// El ping/pong para mantenerlo vivo no necesita cambios.
-const interval = setInterval(() => { /* ... */ });
-server.on('close', () => { clearInterval(interval); });
