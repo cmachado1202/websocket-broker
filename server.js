@@ -1,6 +1,6 @@
 const WebSocket = require('ws');
 
-// Render te proporcionará el puerto a través de la variable de entorno process.env.PORT
+// Render proporciona el puerto a través de una variable de entorno. Usamos 8080 como fallback.
 const PORT = process.env.PORT || 8080;
 const wss = new WebSocket.Server({ port: PORT });
 
@@ -8,39 +8,56 @@ let tabletSocket = null;
 let visorSocket = null;
 
 console.log(`Servidor WebSocket iniciado en el puerto ${PORT}`);
-console.log('Esperando conexiones...');
+console.log('Esperando conexiones de la tablet y el visor...');
 
-wss.on('connection', (ws, req) => {
-    const clientIp = req.socket.remoteAddress;
-    console.log(`Nuevo cliente conectado desde: ${clientIp}`);
+// Función de keep-alive para evitar que Render ponga el servicio a dormir
+const keepAliveInterval = setInterval(() => {
+    wss.clients.forEach(ws => {
+        // Si un cliente no ha respondido al último ping, se considera inactivo.
+        if (ws.isAlive === false) {
+            console.log('Cliente inactivo detectado, terminando conexión.');
+            return ws.terminate();
+        }
+        // Marcar como potencialmente inactivo y enviar un ping. Se espera un 'pong' como respuesta.
+        ws.isAlive = false;
+        ws.ping(() => {});
+    });
+}, 30000); // Se ejecuta cada 30 segundos
+
+wss.on('connection', (ws) => {
+    console.log('Nuevo cliente conectado.');
+    ws.isAlive = true; // Un cliente nuevo está vivo por defecto.
+
+    ws.on('pong', () => {
+        // El cliente respondió a nuestro ping, así que sigue vivo.
+        ws.isAlive = true;
+    });
 
     ws.on('message', (message) => {
-        // Asumimos que el mensaje es binario (imagen) a menos que sea un JSON válido
         let isJson = false;
         let data = {};
 
         try {
-            // Intentamos parsear como texto JSON primero
-            data = JSON.parse(message);
+            // El buffer de Node.js se puede convertir a string para parsear.
+            data = JSON.parse(message.toString());
             isJson = true;
         } catch (e) {
-            // No es JSON, debe ser una imagen (Blob/Buffer)
             isJson = false;
         }
 
         if (isJson) {
-            // --- MANEJO DE MENSAJES JSON ---
+            // --- MANEJO DE MENSAJES JSON (identificación y comandos) ---
             if (data.type === 'identify') {
                 if (data.client === 'tablet') {
                     tabletSocket = ws;
-                    console.log('>>> TABLET registrada.');
+                    console.log('>>> TABLET registrada y lista.');
                     // Avisar al visor que la tablet se ha conectado
                     if (visorSocket && visorSocket.readyState === WebSocket.OPEN) {
                         visorSocket.send(JSON.stringify({ type: 'status', payload: 'TABLET_CONNECTED' }));
                     }
                 } else if (data.client === 'visor') {
                     visorSocket = ws;
-                    console.log('>>> VISOR registrado.');
+                    console.log('>>> VISOR registrado y listo.');
                     // Avisar al visor si la tablet ya estaba conectada
                     if (tabletSocket && tabletSocket.readyState === WebSocket.OPEN) {
                          visorSocket.send(JSON.stringify({ type: 'status', payload: 'TABLET_ALREADY_CONNECTED' }));
@@ -51,14 +68,12 @@ wss.on('connection', (ws, req) => {
             else if (data.type === 'tap_relative' || data.type === 'swipe_relative') {
                 if (tabletSocket && tabletSocket.readyState === WebSocket.OPEN) {
                     // Reenviamos el comando de texto SOLO a la tablet
-                    tabletSocket.send(message); // Reenviamos el mensaje original
-                } else {
-                    console.log('Se recibió un comando de clic, pero no hay ninguna tablet conectada.');
+                    tabletSocket.send(message); // Reenviamos el buffer/string original
                 }
             }
         } else {
             // --- MANEJO DE MENSAJES BINARIOS (IMÁGENES) ---
-            // Si es binario, debe venir de la tablet y se reenvía al visor
+            // Si no es JSON, debe venir de la tablet y se reenvía al visor
             if (visorSocket && visorSocket.readyState === WebSocket.OPEN) {
                 // Reenviamos la imagen SOLO al visor
                 visorSocket.send(message, { binary: true });
@@ -67,11 +82,9 @@ wss.on('connection', (ws, req) => {
     });
 
     ws.on('close', () => {
-        // Limpiamos la referencia al socket que se desconectó
         if (ws === tabletSocket) {
             tabletSocket = null;
             console.log('>>> TABLET desconectada.');
-            // Avisar al visor que la tablet se ha desconectado
             if (visorSocket && visorSocket.readyState === WebSocket.OPEN) {
                 visorSocket.send(JSON.stringify({ type: 'status', payload: 'TABLET_DISCONNECTED' }));
             }
@@ -80,10 +93,11 @@ wss.on('connection', (ws, req) => {
             visorSocket = null;
             console.log('>>> VISOR desconectado.');
         }
-        console.log('Cliente desconectado.');
     });
 
-    ws.on('error', (error) => {
-        console.error('Error en un socket:', error);
-    });
+    ws.on('error', (error) => console.error('Error en un socket:', error));
+});
+
+wss.on('close', () => {
+    clearInterval(keepAliveInterval);
 });
