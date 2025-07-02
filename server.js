@@ -1,15 +1,13 @@
 // Archivo: server.js
 const WebSocket = require('ws');
-// Importamos tanto http como https para manejar el servidor y el heartbeat
+// Importamos http y https (¡con una sola 's'!)
 const http = require('http');
-const https = require('httpss');
+const https = require('https'); // <--- ¡AQUÍ ESTABA EL ERROR, YA CORREGIDO!
 
-const PORT = process.env.PORT || 10000; // Render usa el puerto 10000 por defecto
+const PORT = process.env.PORT || 10000;
 
-// 1. Creamos un servidor HTTP básico.
-// Su única función es responder al heartbeat para mantener el servicio activo.
+// 1. Creamos el servidor HTTP básico para el heartbeat.
 const server = http.createServer((req, res) => {
-    // Este es el endpoint que nuestro heartbeat va a "pinguear"
     if (req.url === '/health') {
         res.writeHead(200, { 'Content-Type': 'text/plain' });
         res.end('OK');
@@ -19,48 +17,42 @@ const server = http.createServer((req, res) => {
     }
 });
 
-// 2. Creamos el servidor WebSocket y lo "adjuntamos" al servidor HTTP.
+// 2. Adjuntamos el servidor WebSocket al servidor HTTP.
 const wss = new WebSocket.Server({ server });
 
-// Usaremos un único mapa para almacenar todos los clientes (visores y tablets).
-// La clave será el ID de conexión, y el valor un objeto con la info del cliente.
 const clients = new Map();
 
-console.log('🚀 SERVIDOR CON HEARTBEAT CORREGIDO. Escuchando en el puerto', PORT);
+console.log('🚀 SERVIDOR DEFINITIVO INICIADO. Escuchando en el puerto', PORT);
 
 wss.on('connection', (ws, req) => {
     const connectionId = Math.random().toString(36).substring(2, 9);
-    ws.id = connectionId; // Asignamos un ID único a esta conexión
+    ws.id = connectionId;
     console.log(`[${connectionId}] 🔌 NUEVO CLIENTE CONECTADO.`);
 
     ws.on('message', (message) => {
-        // --- MANEJO DE IMÁGENES (DATOS BINARIOS) ---
+        // MANEJO DE IMÁGENES
         if (Buffer.isBuffer(message)) {
             const senderInfo = clients.get(ws.id);
-            // Si el que envía la imagen es una tablet identificada...
             if (senderInfo && senderInfo.clientType === 'tablet') {
-                // ...buscamos a su visor correspondiente y le reenviamos la imagen.
                 clients.forEach((receiverInfo) => {
-                    if (receiverInfo.clientType === 'visor' && receiverInfo.tabletId === senderInfo.tabletId) {
-                        if (receiverInfo.ws.readyState === WebSocket.OPEN) {
-                            receiverInfo.ws.send(message);
-                        }
+                    if (receiverInfo.clientType === 'visor' && receiverInfo.tabletId === senderInfo.tabletId && receiverInfo.ws.readyState === WebSocket.OPEN) {
+                        receiverInfo.ws.send(message);
                     }
                 });
             }
             return;
         }
 
-        // --- MANEJO DE COMANDOS (TEXTO/JSON) ---
+        // MANEJO DE COMANDOS JSON
         let data;
         try {
             data = JSON.parse(message);
         } catch (e) {
-            console.error(`[${connectionId}] ❌ ERROR: Mensaje de texto no es un JSON válido: ${message}`);
+            console.error(`[${connectionId}] ❌ ERROR: Mensaje no es JSON: ${message}`);
             return;
         }
 
-        console.log(`[${connectionId}] 📩 Comando JSON recibido:`, data);
+        console.log(`[${connectionId}] 📩 Comando JSON:`, data);
 
         switch (data.type) {
             case 'identify':
@@ -70,9 +62,7 @@ wss.on('connection', (ws, req) => {
                     tabletId: data.tabletId || data.targetTabletId
                 };
                 clients.set(ws.id, clientInfo);
-                console.log(`[${connectionId}] ✅ CLIENTE IDENTIFICADO: Tipo=${clientInfo.clientType}, TabletID=${clientInfo.tabletId}`);
-                
-                // Si el que se identifica es la tablet, le enviamos un OK para que empiece a streamear
+                console.log(`[${connectionId}] ✅ IDENTIFICADO: Tipo=${clientInfo.clientType}, TabletID=${clientInfo.tabletId}`);
                 if (clientInfo.clientType === 'tablet') {
                     ws.send(JSON.stringify({ type: 'identified_ok' }));
                 }
@@ -81,14 +71,10 @@ wss.on('connection', (ws, req) => {
             case 'tap_relative':
             case 'swipe_relative':
                 const senderInfo = clients.get(ws.id);
-                // Si el que envía el comando es un visor identificado...
                 if (senderInfo && senderInfo.clientType === 'visor') {
-                    // ...buscamos a la tablet correspondiente y le reenviamos el comando.
                     clients.forEach((receiverInfo) => {
-                        if (receiverInfo.clientType === 'tablet' && receiverInfo.tabletId === senderInfo.tabletId) {
-                            if (receiverInfo.ws.readyState === WebSocket.OPEN) {
-                                receiverInfo.ws.send(message);
-                            }
+                        if (receiverInfo.clientType === 'tablet' && receiverInfo.tabletId === senderInfo.tabletId && receiverInfo.ws.readyState === WebSocket.OPEN) {
+                            receiverInfo.ws.send(message);
                         }
                     });
                 }
@@ -98,9 +84,7 @@ wss.on('connection', (ws, req) => {
 
     ws.on('close', () => {
         const clientInfo = clients.get(ws.id);
-        const logMsg = clientInfo
-            ? `Tipo=${clientInfo.clientType}, TabletID=${clientInfo.tabletId}`
-            : 'No identificado';
+        const logMsg = clientInfo ? `Tipo=${clientInfo.clientType}, TabletID=${clientInfo.tabletId}` : 'No identificado';
         console.log(`[${connectionId}] 🔌 CLIENTE DESCONECTADO. Info: ${logMsg}`);
         clients.delete(ws.id);
     });
@@ -110,26 +94,26 @@ wss.on('connection', (ws, req) => {
     });
 });
 
-// 3. Ponemos el servidor HTTP a escuchar en el puerto.
+// 3. Ponemos el servidor a escuchar.
 server.listen(PORT, () => {
     console.log(`Servidor HTTP y WebSocket escuchando en el puerto ${PORT}`);
 });
 
-// 4. HEARTBEAT para evitar que Render duerma el servicio
+// 4. HEARTBEAT para mantener el servicio activo.
 const PRIMARY_URL = process.env.RENDER_EXTERNAL_URL;
 if (PRIMARY_URL) {
     setInterval(() => {
-        console.log('💓 Enviando heartbeat para mantener el servicio activo...');
+        console.log('💓 Enviando heartbeat...');
         
-        // ¡LA CORRECCIÓN CLAVE! Usamos https.get porque la URL de Render es segura (https://)
+        // Usamos https.get para la URL segura.
         https.get(`${PRIMARY_URL}/health`, (res) => {
             if (res.statusCode === 200) {
-                console.log('💓 Heartbeat exitoso. El servicio sigue despierto.');
+                console.log('💓 Heartbeat OK.');
             } else {
-                console.error(`❌ Heartbeat falló con código de estado: ${res.statusCode}`);
+                console.error(`❌ Heartbeat falló: ${res.statusCode}`);
             }
         }).on('error', (e) => {
-            console.error(`❌ Error en la solicitud de heartbeat: ${e.message}`);
+            console.error(`❌ Error en heartbeat: ${e.message}`);
         });
-    }, 14 * 60 * 1000); // Se ejecuta cada 14 minutos
+    }, 14 * 60 * 1000); // Cada 14 minutos
 }
