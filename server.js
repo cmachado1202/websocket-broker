@@ -2,6 +2,8 @@
 const WebSocket = require('ws');
 const http = require('http');
 
+// Render te proporcionará el puerto a través de una variable de entorno.
+// Usamos 10000 como valor por defecto para pruebas locales.
 const PORT = process.env.PORT || 10000;
 
 // 1. Creamos un servidor HTTP básico.
@@ -12,7 +14,8 @@ const server = http.createServer((req, res) => {
     if (req.url === '/health') {
         res.writeHead(200, { 'Content-Type': 'text/plain' });
         res.end('Server is up and running');
-        console.log(`💓 Health check / Ping recibido.`);
+        // Este log es útil para confirmar que UptimeRobot está funcionando.
+        console.log(`💓 Health check / Ping recibido.`); 
     } else {
         res.writeHead(404);
         res.end('Not Found');
@@ -22,6 +25,7 @@ const server = http.createServer((req, res) => {
 // 2. Creamos el servidor WebSocket y lo "adjuntamos" al servidor HTTP.
 const wss = new WebSocket.Server({ server });
 
+// Mapa para almacenar todos los clientes conectados.
 const clients = new Map();
 
 console.log('🚀 SERVIDOR DEFINITIVO INICIADO. Escuchando en el puerto', PORT);
@@ -36,6 +40,7 @@ wss.on('connection', (ws) => {
         if (Buffer.isBuffer(message)) {
             const senderInfo = clients.get(ws.id);
             if (senderInfo && senderInfo.clientType === 'tablet') {
+                // Si el que envía la imagen es una tablet, la reenviamos a su visor.
                 clients.forEach((receiverInfo) => {
                     if (receiverInfo.clientType === 'visor' && receiverInfo.tabletId === senderInfo.tabletId && receiverInfo.ws.readyState === WebSocket.OPEN) {
                         receiverInfo.ws.send(message);
@@ -45,7 +50,7 @@ wss.on('connection', (ws) => {
             return;
         }
 
-        // MANEJO DE COMANDOS JSON
+        // MANEJO DE COMANDOS (TEXTO/JSON)
         let data;
         try {
             data = JSON.parse(message);
@@ -63,14 +68,17 @@ wss.on('connection', (ws) => {
                 };
                 clients.set(ws.id, clientInfo);
                 console.log(`[${connectionId}] ✅ IDENTIFICADO: Tipo=${clientInfo.clientType}, TabletID=${clientInfo.tabletId}`);
+                // Si el que se identifica es la tablet, le respondemos con un OK para que empiece a streamear.
                 if (clientInfo.clientType === 'tablet') {
                     ws.send(JSON.stringify({ type: 'identified_ok' }));
                 }
                 break;
+
             case 'tap_relative':
             case 'swipe_relative':
                 const senderInfo = clients.get(ws.id);
                 if (senderInfo && senderInfo.clientType === 'visor') {
+                     // Si el que envía un comando táctil es un visor, lo reenviamos a la tablet.
                     clients.forEach((receiverInfo) => {
                         if (receiverInfo.clientType === 'tablet' && receiverInfo.tabletId === senderInfo.tabletId && receiverInfo.ws.readyState === WebSocket.OPEN) {
                             receiverInfo.ws.send(message);
@@ -93,7 +101,7 @@ wss.on('connection', (ws) => {
     });
 });
 
-// 3. Ponemos el servidor a escuchar.
+// 3. Ponemos el servidor a escuchar en el puerto que Render nos asigne.
 server.listen(PORT, () => {
     console.log(`Servidor HTTP y WebSocket escuchando en el puerto ${PORT}`);
 });
