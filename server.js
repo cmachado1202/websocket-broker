@@ -4,23 +4,27 @@ const http = require('http');
 
 const PORT = process.env.PORT || 10000;
 
-// Servidor HTTP simple para que Render tenga algo a lo que adjuntarse
-// y para que el monitor de uptime tenga un endpoint al que llamar.
+// 1. Creamos un servidor HTTP básico.
+// Su única función es responder al monitor externo (UptimeRobot)
+// para mantener el servicio activo.
 const server = http.createServer((req, res) => {
+    // Este es el endpoint que el monitor externo va a "pinguear"
     if (req.url === '/health') {
         res.writeHead(200, { 'Content-Type': 'text/plain' });
         res.end('Server is up and running');
+        console.log(`💓 Health check / Ping recibido.`);
     } else {
         res.writeHead(404);
         res.end('Not Found');
     }
 });
 
+// 2. Creamos el servidor WebSocket y lo "adjuntamos" al servidor HTTP.
 const wss = new WebSocket.Server({ server });
 
 const clients = new Map();
 
-console.log('🚀 SERVIDOR SIMPLIFICADO INICIADO. Escuchando en el puerto', PORT);
+console.log('🚀 SERVIDOR DEFINITIVO INICIADO. Escuchando en el puerto', PORT);
 
 wss.on('connection', (ws) => {
     const connectionId = Math.random().toString(36).substring(2, 9);
@@ -28,6 +32,7 @@ wss.on('connection', (ws) => {
     console.log(`[${connectionId}] 🔌 NUEVO CLIENTE CONECTADO.`);
 
     ws.on('message', (message) => {
+        // MANEJO DE IMÁGENES (DATOS BINARIOS)
         if (Buffer.isBuffer(message)) {
             const senderInfo = clients.get(ws.id);
             if (senderInfo && senderInfo.clientType === 'tablet') {
@@ -40,6 +45,7 @@ wss.on('connection', (ws) => {
             return;
         }
 
+        // MANEJO DE COMANDOS JSON
         let data;
         try {
             data = JSON.parse(message);
@@ -50,7 +56,11 @@ wss.on('connection', (ws) => {
 
         switch (data.type) {
             case 'identify':
-                const clientInfo = { ws: ws, clientType: data.client, tabletId: data.tabletId || data.targetTabletId };
+                const clientInfo = {
+                    ws: ws,
+                    clientType: data.client,
+                    tabletId: data.tabletId || data.targetTabletId
+                };
                 clients.set(ws.id, clientInfo);
                 console.log(`[${connectionId}] ✅ IDENTIFICADO: Tipo=${clientInfo.clientType}, TabletID=${clientInfo.tabletId}`);
                 if (clientInfo.clientType === 'tablet') {
@@ -83,6 +93,7 @@ wss.on('connection', (ws) => {
     });
 });
 
+// 3. Ponemos el servidor a escuchar.
 server.listen(PORT, () => {
     console.log(`Servidor HTTP y WebSocket escuchando en el puerto ${PORT}`);
 });
