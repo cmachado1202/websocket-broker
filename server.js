@@ -1,4 +1,4 @@
-// Archivo: server.js (Revisado y Mejorado)
+// Archivo: server.js (COMPLETO Y MODIFICADO)
 const WebSocket = require('ws');
 const http = require('http');
 
@@ -15,10 +15,19 @@ const server = http.createServer((req, res) => {
     }
 });
 
-const wss = new WebSocket.Server({ server });
+// --- MODIFICACIÓN CLAVE AQUÍ ---
+const wss = new WebSocket.Server({
+    server,
+    handleProtocols: (protocols) => {
+        // Acepta cualquier subprotocolo que el cliente ofrezca.
+        // Esto aumenta la compatibilidad con diferentes clientes y proxies.
+        return protocols.values().next().value || false;
+    }
+});
+
 const clients = new Map(); // Usaremos el ws.id como clave
 
-console.log(`🚀 SERVIDOR DEFINITIVO 2.0 INICIADO. Escuchando en el puerto ${PORT}`);
+console.log(`🚀 SERVIDOR DEFINITIVO 2.1 INICIADO. Escuchando en el puerto ${PORT}`);
 
 wss.on('connection', (ws) => {
     // Asignamos un ID único a cada conexión para facilitar el seguimiento en los logs
@@ -62,6 +71,7 @@ wss.on('connection', (ws) => {
         }
 
         const senderInfo = clients.get(ws.id);
+        if (!senderInfo) return; // Si el cliente ya se desconectó, no hacer nada
 
         switch (data.type) {
             case 'identify':
@@ -79,7 +89,7 @@ wss.on('connection', (ws) => {
 
             case 'tap_relative':
             case 'swipe_relative':
-                if (!senderInfo || senderInfo.clientType !== 'visor') return;
+                if (senderInfo.clientType !== 'visor') return;
 
                 // Buscamos la tablet a la que va dirigido el comando
                 clients.forEach((receiverInfo, receiverId) => {
@@ -103,7 +113,7 @@ wss.on('connection', (ws) => {
             ? `Tipo=${clientInfo.clientType}, TabletID=${clientInfo.tabletId}`
             : 'No identificado';
         
-        console.log(`[${ws.id}] 🔌 CLIENTE DESCONECTADO. Razón: ${reason || 'Normal'}. Info: ${logMsg}. Total clientes: ${clients.size - 1}`);
+        console.log(`[${ws.id}] 🔌 CLIENTE DESCONECTADO. Razón: ${code} ${reason || '(Sin razón)'}. Info: ${logMsg}. Total clientes: ${clients.size - 1}`);
         clients.delete(ws.id);
     });
 
