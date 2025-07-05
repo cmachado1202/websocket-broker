@@ -1,10 +1,9 @@
-// Archivo: server.js (CORREGIDO Y MÁS ROBUSTO)
+// Archivo: server.js (VERSIÓN FINAL CON MANEJO DE KEEP-ALIVE)
 const WebSocket = require('ws');
-const http =require('http');
+const http = require('http');
 
 const PORT = process.env.PORT || 10000;
 
-// Servidor HTTP para los health checks de Render
 const server = http.createServer((req, res) => {
     if (req.url === '/health') {
         res.writeHead(200, { 'Content-Type': 'text/plain' });
@@ -26,12 +25,19 @@ wss.on('connection', (ws) => {
 
     console.log(`[${connectionId}] 🔌 NUEVO CLIENTE CONECTADO. Esperando identificación...`);
 
+    // ----- ¡¡¡LA CORRECCIÓN CLAVE ESTÁ AQUÍ!!! -----
+    // El cliente (OkHttp en Android) envía pings a nivel de protocolo para mantener
+    // la conexión viva. Debemos responderle con un pong para que no la cierre.
+    ws.on('ping', () => {
+        console.log(`[${connectionId}] ❤️ Ping de keep-alive recibido. Respondiendo pong.`);
+        ws.pong(); // La librería 'ws' se encarga de enviar el frame de pong correcto.
+    });
+
     ws.on('message', (message) => {
-        // --- CASO 1: El mensaje es binario (una imagen de la tablet) ---
+        // --- CASO 1: Imagen binaria ---
         if (Buffer.isBuffer(message)) {
             const senderInfo = clients.get(ws.id);
             if (!senderInfo || senderInfo.clientType !== 'tablet') return;
-
             clients.forEach((receiverInfo) => {
                 if (receiverInfo.clientType === 'visor' && receiverInfo.tabletId === senderInfo.tabletId && receiverInfo.ws.readyState === WebSocket.OPEN) {
                     receiverInfo.ws.send(message);
@@ -40,15 +46,12 @@ wss.on('connection', (ws) => {
             return;
         }
 
-        // --- CASO 2: El mensaje es texto (JSON con comandos) ---
+        // --- CASO 2: Mensaje de texto (JSON) ---
         let data;
         try {
-            // ----- ¡¡¡LA CORRECCIÓN CLAVE ESTÁ AQUÍ!!! -----
-            // Forzamos la conversión a String para evitar errores con Buffers.
-            const messageString = message.toString();
-            data = JSON.parse(messageString);
+            data = JSON.parse(message.toString());
         } catch (e) {
-            console.error(`[${ws.id}] ❌ Mensaje no es JSON válido:`, message.toString(), 'Error:', e.message);
+            console.error(`[${ws.id}] ❌ Mensaje no es JSON válido:`, message.toString());
             return;
         }
 
@@ -56,12 +59,11 @@ wss.on('connection', (ws) => {
         if (!senderInfo) return;
 
         switch (data.type) {
+            // Este es nuestro ping de "handshake" inicial
             case 'ping':
-                // Ahora este log SÍ debería aparecer en tu servidor
-                console.log(`[${ws.id}] 🏓 Ping recibido. Enviando pong.`);
+                console.log(`[${ws.id}] 🏓 Ping de aplicación recibido. Enviando pong.`);
                 ws.send(JSON.stringify({ type: 'pong' }));
                 break;
-
             case 'identify':
                 senderInfo.clientType = data.client;
                 senderInfo.tabletId = data.tabletId || data.targetTabletId;
@@ -70,7 +72,6 @@ wss.on('connection', (ws) => {
                     ws.send(JSON.stringify({ type: 'identified_ok' }));
                 }
                 break;
-
             case 'tap_relative':
             case 'swipe_relative':
                 if (senderInfo.clientType !== 'visor') return;
@@ -80,10 +81,6 @@ wss.on('connection', (ws) => {
                         console.log(`[${ws.id}] 👉 Visor -> Comando '${data.type}' a Tablet ${receiverInfo.tabletId}`);
                     }
                 });
-                break;
-            
-            default:
-                console.log(`[${ws.id}] Comando desconocido recibido: ${data.type}`);
                 break;
         }
     });
