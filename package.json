@@ -1,17 +1,12 @@
 {
-  "name": "websocket-broker",
+  "name": "websocket-broker-for-vercel",
   "version": "1.0.0",
-  "description": "Simple WebSocket relay server for remote control app",
-  "main": "server.js",
-  "scripts": {
-    "start": "node server.js"
+  "description": "Servidor WebSocket para visor remoto, configurado para Vercel.",
+  "main": "api/index.js",
+  "engines": {
+    "node": "18.x"
   },
   "dependencies": {
     "ws": "^8.17.0"
-  },
-  "engines": {
-    "node": ">=18.0.0"
-  },
-  "author": "",
-  "license": "ISC"
+  }
 }
