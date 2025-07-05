@@ -9,7 +9,7 @@ const wss = new WebSocketServer({ server });
 const tablets = new Map();
 const viewers = new Map();
 
-console.log("Servidor WebSocket v3.0 (simple) inicializándose...");
+console.log("Servidor WebSocket v4.0 (Diagnóstico 'Hola') inicializándose...");
 
 wss.on('connection', (ws) => {
     console.log(`[CONEXIÓN] Nuevo cliente.`);
@@ -18,7 +18,7 @@ wss.on('connection', (ws) => {
     let clientType = null;
 
     ws.on('message', (message) => {
-        // Frames de video
+        // Frames de video (los ignoramos en esta prueba, pero dejamos la lógica)
         if (Buffer.isBuffer(message)) {
             if (clientType === 'tablet' && viewers.has(clientId)) {
                 viewers.get(clientId).forEach(v => v.send(message, { binary: true }));
@@ -26,29 +26,39 @@ wss.on('connection', (ws) => {
             return;
         }
 
+        let msgStr = message.toString();
         let data;
+
+        // --> ¡¡¡CAMBIO IMPORTANTE!!! Primero vemos si es JSON
         try {
-            data = JSON.parse(message.toString());
+            data = JSON.parse(msgStr);
         } catch (e) {
-            return; // Ignorar mensajes no-JSON
+            // Si no es JSON, es nuestro mensaje de prueba "hola"
+            console.log(`[PRUEBA 'HOLA'] Mensaje de texto recibido de ${clientType} [${clientId}]: "${msgStr}"`);
+            // Se lo reenviamos al visor para confirmar que llega
+            if (clientType === 'tablet' && viewers.has(clientId)) {
+                viewers.get(clientId).forEach(v => v.send(JSON.stringify({type: 'debug_message', payload: msgStr})));
+            }
+            return;
         }
 
+        // Si es JSON, es un comando
         if (data.type === 'identify') {
             clientId = data.tabletId;
             clientType = data.client;
+            
+            // --> LOGS MÁS DETALLADOS
+            console.log(`[IDENTIFY] Mensaje de identificación recibido. Tipo: ${clientType}, ID: ${clientId}`);
 
             if (clientType === 'tablet') {
-                console.log(`[IDENTIFY] TABLET registrada: ${clientId}`);
                 tablets.set(clientId, ws);
             } else if (clientType === 'viewer') {
-                console.log(`[IDENTIFY] VISOR conectado para tablet: ${clientId}`);
                 if (!viewers.has(clientId)) {
                     viewers.set(clientId, new Set());
                 }
                 viewers.get(clientId).add(ws);
             }
         } else if (clientType === 'viewer' && tablets.has(clientId)) {
-            // Reenviar comandos de touch del visor a la tablet
             console.log(`[COMANDO] Reenviando '${data.type}' a la tablet ${clientId}`);
             tablets.get(clientId).send(JSON.stringify(data));
         }
@@ -71,6 +81,6 @@ wss.on('connection', (ws) => {
     });
 });
 
-app.get('/', (req, res) => res.status(200).send('Servidor Broker v3.0 funcionando.'));
+app.get('/', (req, res) => res.status(200).send('Servidor Broker v4.0 (Diagnóstico) funcionando.'));
 const PORT = process.env.PORT || 10000;
 server.listen(PORT, () => console.log(`✅ Servidor escuchando en ${PORT}`));
