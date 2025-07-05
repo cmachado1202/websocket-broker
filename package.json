@@ -1,12 +1,16 @@
 {
-  "name": "websocket-broker-for-vercel",
+  "name": "websocket-broker-render",
   "version": "1.0.0",
-  "description": "Servidor WebSocket para visor remoto, configurado para Vercel.",
-  "main": "api/index.js",
+  "description": "Servidor WebSocket para app de control remoto, optimizado para Render.",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
   "engines": {
-    "node": "18.x"
+    "node": ">=18.0.0"
   },
   "dependencies": {
+    "express": "^4.19.2",
     "ws": "^8.17.0"
   }
 }
