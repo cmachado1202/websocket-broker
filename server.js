@@ -1,12 +1,11 @@
-// Archivo: server.js (FINAL CON HANDSHAKE PING-PONG)
+// Archivo: server.js (CORREGIDO Y MÁS ROBUSTO)
 const WebSocket = require('ws');
-const http = require('http');
+const http =require('http');
 
 const PORT = process.env.PORT || 10000;
 
-// Se crea un servidor HTTP básico. Render lo necesita para el health check.
+// Servidor HTTP para los health checks de Render
 const server = http.createServer((req, res) => {
-    // Render.com envía pings a esta ruta para saber si el servicio está vivo.
     if (req.url === '/health') {
         res.writeHead(200, { 'Content-Type': 'text/plain' });
         res.end('Server is healthy and running.');
@@ -16,15 +15,14 @@ const server = http.createServer((req, res) => {
 });
 
 const wss = new WebSocket.Server({ server });
-const clients = new Map(); // Mapa para guardar toda la información de los clientes conectados
+const clients = new Map();
 
 console.log(`🚀 SERVIDOR WEBSOCKET INICIADO. Escuchando en el puerto ${PORT}`);
 
 wss.on('connection', (ws) => {
-    // Asignamos un ID único a cada conexión para poder identificarla.
     const connectionId = Math.random().toString(36).substring(2, 9);
     ws.id = connectionId;
-    clients.set(connectionId, { ws: ws }); // Guardamos el websocket en nuestro mapa
+    clients.set(connectionId, { ws: ws });
 
     console.log(`[${connectionId}] 🔌 NUEVO CLIENTE CONECTADO. Esperando identificación...`);
 
@@ -32,59 +30,60 @@ wss.on('connection', (ws) => {
         // --- CASO 1: El mensaje es binario (una imagen de la tablet) ---
         if (Buffer.isBuffer(message)) {
             const senderInfo = clients.get(ws.id);
-            // Solo las tablets pueden enviar imágenes. Si no es una tablet, ignoramos.
             if (!senderInfo || senderInfo.clientType !== 'tablet') return;
 
-            // Reenviamos la imagen a todos los visores que estén mirando esta tablet
             clients.forEach((receiverInfo) => {
                 if (receiverInfo.clientType === 'visor' && receiverInfo.tabletId === senderInfo.tabletId && receiverInfo.ws.readyState === WebSocket.OPEN) {
                     receiverInfo.ws.send(message);
                 }
             });
-            return; // Fin del manejo de imágenes
+            return;
         }
 
         // --- CASO 2: El mensaje es texto (JSON con comandos) ---
         let data;
         try {
-            data = JSON.parse(message);
+            // ----- ¡¡¡LA CORRECCIÓN CLAVE ESTÁ AQUÍ!!! -----
+            // Forzamos la conversión a String para evitar errores con Buffers.
+            const messageString = message.toString();
+            data = JSON.parse(messageString);
         } catch (e) {
-            console.error(`[${ws.id}] ❌ Mensaje no es JSON:`, message.toString());
+            console.error(`[${ws.id}] ❌ Mensaje no es JSON válido:`, message.toString(), 'Error:', e.message);
             return;
         }
 
         const senderInfo = clients.get(ws.id);
-        if (!senderInfo) return; // Si el cliente no está en el mapa, ignoramos
+        if (!senderInfo) return;
 
         switch (data.type) {
-            // Lógica de Handshake para asegurar que la conexión está viva
             case 'ping':
+                // Ahora este log SÍ debería aparecer en tu servidor
                 console.log(`[${ws.id}] 🏓 Ping recibido. Enviando pong.`);
                 ws.send(JSON.stringify({ type: 'pong' }));
                 break;
 
-            // El cliente (tablet o visor) se identifica
             case 'identify':
-                senderInfo.clientType = data.client; // 'tablet' o 'visor'
-                senderInfo.tabletId = data.tabletId || data.targetTabletId; // El ID de la tablet
+                senderInfo.clientType = data.client;
+                senderInfo.tabletId = data.tabletId || data.targetTabletId;
                 console.log(`[${ws.id}] ✅ IDENTIFICADO: Tipo=${senderInfo.clientType}, TabletID=${senderInfo.tabletId}`);
-                // Si es la tablet la que se identifica, le confirmamos que todo está OK
                 if (senderInfo.clientType === 'tablet') {
                     ws.send(JSON.stringify({ type: 'identified_ok' }));
                 }
                 break;
 
-            // Comandos de toque/deslizamiento enviados desde el visor
             case 'tap_relative':
             case 'swipe_relative':
-                if (senderInfo.clientType !== 'visor') return; // Solo los visores envían comandos
-                // Reenviamos el comando a la tablet correspondiente
+                if (senderInfo.clientType !== 'visor') return;
                 clients.forEach((receiverInfo) => {
                     if (receiverInfo.clientType === 'tablet' && receiverInfo.tabletId === senderInfo.tabletId && receiverInfo.ws.readyState === WebSocket.OPEN) {
                         receiverInfo.ws.send(JSON.stringify(data));
                         console.log(`[${ws.id}] 👉 Visor -> Comando '${data.type}' a Tablet ${receiverInfo.tabletId}`);
                     }
                 });
+                break;
+            
+            default:
+                console.log(`[${ws.id}] Comando desconocido recibido: ${data.type}`);
                 break;
         }
     });
@@ -93,14 +92,13 @@ wss.on('connection', (ws) => {
         const clientInfo = clients.get(ws.id);
         const logMsg = clientInfo && clientInfo.clientType ? `Tipo=${clientInfo.clientType}, TabletID=${clientInfo.tabletId}` : 'No identificado';
         console.log(`[${ws.id}] 🔌 CLIENTE DESCONECTADO. ${logMsg}`);
-        clients.delete(ws.id); // Lo eliminamos del mapa
+        clients.delete(ws.id);
     });
 
     ws.on('error', (error) => {
         console.error(`[${ws.id}] 💥 ERROR DE WEBSOCKET:`, error);
-        ws.close(); // Cerramos la conexión si hay un error
+        ws.close();
     });
 });
 
-// Iniciamos el servidor HTTP, que a su vez maneja el WebSocket Server
 server.listen(PORT, () => console.log(`Servidor HTTP y WebSocket escuchando en el puerto ${PORT}`));
