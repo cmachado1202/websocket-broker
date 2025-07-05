@@ -1,36 +1,36 @@
 const express = require('express');
 const http = require('http');
 const { WebSocketServer } = require('ws');
+const cors = require('cors');
 
 const app = express();
+
+// Usar CORS para todas las peticiones HTTP. Ayuda con el handshake inicial.
+app.use(cors());
+
 const server = http.createServer(app);
+
+// Creamos el servidor WebSocket explícitamente sobre el servidor HTTP
 const wss = new WebSocketServer({ server });
 
 const tablets = new Map();
 const viewers = new Map();
 
-console.log("Servidor WebSocket v5.0 (Diagnóstico Visor) inicializándose...");
+console.log("Servidor WebSocket v6.0 (Robusto) inicializándose...");
 
-wss.on('connection', (ws) => {
+wss.on('connection', (ws, req) => {
+    const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+    console.log(`[CONEXIÓN] Cliente conectado desde ${clientIp}`);
+    
     let clientId = null;
     let clientType = null;
 
     ws.on('message', (message) => {
-        // Frames de video
         if (Buffer.isBuffer(message)) {
             if (clientType === 'tablet' && viewers.has(clientId)) {
-                const viewerSet = viewers.get(clientId);
-                
-                // 1. Reenviamos el frame de la imagen como siempre
-                viewerSet.forEach(v => v.send(message, { binary: true }));
-
-                // 2. ADEMÁS, enviamos un mensaje de texto para confirmar la recepción
-                const confirmationMsg = JSON.stringify({
-                    type: 'frame_received',
-                    size: message.length,
-                    timestamp: Date.now()
+                viewers.get(clientId).forEach(v => {
+                    if (v.readyState === ws.OPEN) v.send(message, { binary: true })
                 });
-                viewerSet.forEach(v => v.send(confirmationMsg));
             }
             return;
         }
@@ -44,18 +44,19 @@ wss.on('connection', (ws) => {
             console.log(`[IDENTIFY] Cliente identificado. Tipo: ${clientType}, ID: ${clientId}`);
 
             if (clientType === 'tablet') {
+                if(tablets.has(clientId)) tablets.get(clientId).close();
                 tablets.set(clientId, ws);
             } else if (clientType === 'viewer') {
                 if (!viewers.has(clientId)) viewers.set(clientId, new Set());
                 viewers.get(clientId).add(ws);
             }
         } else if (clientType === 'viewer' && tablets.has(clientId)) {
-            tablets.get(clientId).send(JSON.stringify(data));
+            if(tablets.get(clientId).readyState === ws.OPEN)
+                tablets.get(clientId).send(JSON.stringify(data));
         }
     });
 
     ws.on('close', () => {
-        // ... (lógica de desconexión sin cambios) ...
         console.log(`[DESCONEXIÓN] Cliente ${clientType} [${clientId}] se ha desconectado.`);
         if (clientType === 'tablet') {
             tablets.delete(clientId);
@@ -70,6 +71,6 @@ wss.on('connection', (ws) => {
     });
 });
 
-app.get('/', (req, res) => res.status(200).send('Servidor Broker v5.0 funcionando.'));
+app.get('/', (req, res) => res.status(200).send('Servidor Broker v6.0 funcionando.'));
 const PORT = process.env.PORT || 10000;
 server.listen(PORT, () => console.log(`✅ Servidor escuchando en ${PORT}`));
