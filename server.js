@@ -25,12 +25,11 @@ wss.on('connection', (ws) => {
 
     console.log(`[${connectionId}] 🔌 NUEVO CLIENTE CONECTADO. Esperando identificación...`);
 
-    // ----- ¡¡¡LA CORRECCIÓN CLAVE ESTÁ AQUÍ!!! -----
-    // El cliente (OkHttp en Android) envía pings a nivel de protocolo para mantener
-    // la conexión viva. Debemos responderle con un pong para que no la cierre.
+    // ----- ¡¡¡ESTA PARTE ES CRUCIAL PARA LA ESTABILIDAD!!! -----
+    // Responde a los pings de bajo nivel que envía OkHttp (Android) para mantener la conexión viva.
     ws.on('ping', () => {
         console.log(`[${connectionId}] ❤️ Ping de keep-alive recibido. Respondiendo pong.`);
-        ws.pong(); // La librería 'ws' se encarga de enviar el frame de pong correcto.
+        ws.pong(); // La librería 'ws' envía la respuesta correcta.
     });
 
     ws.on('message', (message) => {
@@ -59,7 +58,7 @@ wss.on('connection', (ws) => {
         if (!senderInfo) return;
 
         switch (data.type) {
-            // Este es nuestro ping de "handshake" inicial
+            // Este es nuestro ping de "handshake" inicial de la aplicación.
             case 'ping':
                 console.log(`[${ws.id}] 🏓 Ping de aplicación recibido. Enviando pong.`);
                 ws.send(JSON.stringify({ type: 'pong' }));
