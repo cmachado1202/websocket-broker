@@ -1,30 +1,20 @@
 const express = require('express');
 const http = require('http');
 const { WebSocketServer } = require('ws');
-
 const app = express();
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
-
-const tablets = new Map();
-const viewers = new Map();
-
-console.log("Servidor Koyeb v1.0 listo.");
-
+const tablets = new Map(), viewers = new Map();
+console.log("Servidor Koyeb v2.0 listo.");
 wss.on('connection', ws => {
-    let clientId, clientType;
-    console.log("Cliente conectado.");
+    let clientId, clientType; console.log("Cliente conectado.");
     ws.on('message', message => {
         if (Buffer.isBuffer(message)) {
             if (clientType === 'tablet' && viewers.has(clientId)) {
-                viewers.get(clientId).forEach(v => {
-                    if (v.readyState === ws.OPEN) v.send(message, { binary: true });
-                });
-            }
-            return;
+                viewers.get(clientId).forEach(v => { if (v.readyState === ws.OPEN) v.send(message, { binary: true }); });
+            } return;
         }
-        let data;
-        try { data = JSON.parse(message.toString()); } catch (e) { return; }
+        let data; try { data = JSON.parse(message.toString()); } catch (e) { return; }
         if (data.type === 'identify') {
             clientId = data.tabletId; clientType = data.client;
             console.log(`[IDENTIFY] ${clientType} con ID ${clientId}`);
@@ -55,8 +45,6 @@ wss.on('connection', ws => {
         }
     });
 });
-
-app.get('/', (req, res) => res.send('Servidor broker Koyeb funcionando.'));
-
+app.get('/', (req, res) => res.send('Servidor broker funcionando.'));
 const port = process.env.PORT || 8080;
 server.listen(port, () => console.log(`✅ Servidor escuchando en ${port}`));
