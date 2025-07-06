@@ -1,13 +1,12 @@
 {
-  "name": "super-simple-broker",
+  "name": "final-broker",
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js",
-    "koyeb-pre-install": "npm install --production"
+    "start": "node index.js"
   },
   "dependencies": {
-    "ws": "^8.17.0"
+    "ws": "8.17.0"
   },
   "engines": {
     "node": "18.x"
