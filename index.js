@@ -1,3 +1,16 @@
+const express = require('express');
+const http = require('http');
+const { WebSocketServer } = require('ws'); // Asegúrate de tener 'ws' instalado
+
+const app = express();
+const server = http.createServer(app);
+const wss = new WebSocketServer({ server }); // ✅ Aquí se define 'wss'
+
+const tablets = new Map(); // tabletId => ws
+const viewers = new Map(); // tabletId => Set<ws>
+
+console.log("📡 Servidor Render v1.1 listo.");
+
 wss.on('connection', (ws) => {
     let clientId = null;
     let clientType = null;
@@ -7,7 +20,7 @@ wss.on('connection', (ws) => {
     ws.on('message', (message) => {
         if (Buffer.isBuffer(message)) {
             // 🖼️ Frame recibido desde una tablet
-            if (clientType === 'tablet' && clientId && isAuthenticated) {
+            if (clientType === 'tablet' && clientId) {
                 const viewerSet = viewers.get(clientId);
                 if (viewerSet?.size > 0) {
                     viewerSet.forEach((viewerWs) => {
@@ -25,8 +38,8 @@ wss.on('connection', (ws) => {
                 }
             } else {
                 console.warn("🚫 Frame recibido de cliente no autenticado o no tablet");
-                return;
             }
+            return;
         }
 
         // 📡 Mensaje JSON: identificación o comandos táctiles
@@ -46,10 +59,9 @@ wss.on('connection', (ws) => {
 
             if (clientType === 'tablet') {
                 // Autenticar la tablet
-                isAuthenticated = true;
                 ws.send(JSON.stringify({ type: 'auth_success' }));
 
-                // Si ya existe una tablet con este ID, cerrar la anterior
+                // Si ya existe una tablet con este ID, cierra la anterior
                 if (tablets.has(clientId)) {
                     console.log("⚠️ Cerrando conexión previa de tablet...");
                     tablets.get(clientId).close();
@@ -113,4 +125,15 @@ wss.on('connection', (ws) => {
             }
         }
     });
+});
+
+// Ruta raíz
+app.get('/', (req, res) => {
+    res.send('✅ Servidor broker funcionando correctamente.');
+});
+
+// Iniciar servidor
+const port = process.env.PORT || 19000;
+server.listen(port, () => {
+    console.log(`🚀 Servidor escuchando en el puerto ${port}`);
 });
