@@ -3,7 +3,8 @@
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "koyeb-pre-install": "npm install --production"
   },
   "dependencies": {
     "ws": "^8.17.0"
@@ -12,4 +13,3 @@
     "node": "18.x"
   }
 }
-
