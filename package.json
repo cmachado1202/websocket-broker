@@ -1,12 +1,18 @@
 {
   "name": "render-broker",
-  "version": "1.0.0",
+  "version": "1.0.1",
+  "description": "WebSocket broker for remote screen sharing",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
+  "author": "",
+  "license": "ISC",
   "dependencies": {
-    "ws": "^8.17.0",
-    "express": "^4.19.2"
+    "express": "^4.19.2",
+    "ws": "^8.17.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   }
 }
