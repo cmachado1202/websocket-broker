@@ -9,36 +9,28 @@ const wss = new WebSocketServer({ server });
 const tablets = new Map();
 const viewers = new Map();
 
-console.log("Servidor Broker v2.0 listo para conexiones.");
+console.log("Servidor Broker v3.0 (con Keep-Alive) listo.");
 
 wss.on('connection', (ws) => {
     let clientId = null;
     let clientType = null;
-    let isAlive = true;
+    ws.isAlive = true;
 
     ws.on('pong', () => {
-        isAlive = true;
+        ws.isAlive = true;
     });
 
     console.log("Cliente conectado.");
 
     ws.on('message', (message) => {
-        isAlive = true; 
-        
         if (Buffer.isBuffer(message)) {
             if (clientType === 'tablet' && clientId) {
                 const viewerSet = viewers.get(clientId);
-                if (viewerSet?.size > 0) {
-                    viewerSet.forEach((viewerWs) => {
-                        if (viewerWs.readyState === WebSocket.OPEN) {
-                            try {
-                                viewerWs.send(message, { binary: true });
-                            } catch (e) {
-                                console.error("Error al reenviar frame a visor:", e);
-                            }
-                        }
-                    });
-                }
+                viewerSet?.forEach((viewerWs) => {
+                    if (viewerWs.readyState === WebSocket.OPEN) {
+                        viewerWs.send(message, { binary: true });
+                    }
+                });
             }
             return;
         }
@@ -60,6 +52,7 @@ wss.on('connection', (ws) => {
                 }
                 tablets.set(clientId, ws);
                 
+                ws.send(JSON.stringify({ type: 'auth_success' }));
                 const viewerSet = viewers.get(clientId);
                 viewerSet?.forEach((v) => v.send(JSON.stringify({ type: 'tablet_connected' })));
 
@@ -68,6 +61,8 @@ wss.on('connection', (ws) => {
                     viewers.set(clientId, new Set());
                 }
                 viewers.get(clientId).add(ws);
+
+                ws.send(JSON.stringify({ type: 'auth_success' }));
 
                 if (tablets.has(clientId)) {
                     ws.send(JSON.stringify({ type: 'tablet_connected' }));
@@ -96,7 +91,6 @@ wss.on('connection', (ws) => {
                 viewers.delete(clientId);
             }
         }
-        clearInterval(pingInterval);
     });
 
     ws.on('error', (err) => {
@@ -106,7 +100,10 @@ wss.on('connection', (ws) => {
 
 const pingInterval = setInterval(() => {
     wss.clients.forEach((ws) => {
-        if (ws.isAlive === false) return ws.terminate();
+        if (ws.isAlive === false) {
+            console.log("Cliente inactivo, terminando conexión.");
+            return ws.terminate();
+        }
         ws.isAlive = false;
         ws.ping();
     });
