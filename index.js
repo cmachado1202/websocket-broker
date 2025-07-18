@@ -1,25 +1,31 @@
 const express = require('express');
 const http = require('http');
-const { WebSocketServer } = require('ws'); // Asegúrate de tener 'ws' instalado
+const { WebSocket, WebSocketServer } = require('ws');
 
 const app = express();
 const server = http.createServer(app);
-const wss = new WebSocketServer({ server }); // ✅ Aquí se define 'wss'
+const wss = new WebSocketServer({ server });
 
-const tablets = new Map(); // tabletId => ws
-const viewers = new Map(); // tabletId => Set<ws>
+const tablets = new Map();
+const viewers = new Map();
 
-console.log("📡 Servidor Render v1.1 listo.");
+console.log("Servidor Broker v2.0 listo para conexiones.");
 
 wss.on('connection', (ws) => {
     let clientId = null;
     let clientType = null;
+    let isAlive = true;
 
-    console.log("🔗 Cliente conectado.");
+    ws.on('pong', () => {
+        isAlive = true;
+    });
+
+    console.log("Cliente conectado.");
 
     ws.on('message', (message) => {
+        isAlive = true; 
+        
         if (Buffer.isBuffer(message)) {
-            // 🖼️ Frame recibido desde una tablet
             if (clientType === 'tablet' && clientId) {
                 const viewerSet = viewers.get(clientId);
                 if (viewerSet?.size > 0) {
@@ -27,27 +33,20 @@ wss.on('connection', (ws) => {
                         if (viewerWs.readyState === WebSocket.OPEN) {
                             try {
                                 viewerWs.send(message, { binary: true });
-                                console.log(`✅ Frame reenviado a ${viewerSet.size} visores`);
                             } catch (e) {
-                                console.error("❌ Error al enviar frame a visor", e);
+                                console.error("Error al reenviar frame a visor:", e);
                             }
                         }
                     });
-                } else {
-                    console.warn("🚫 Frame descartado: sin visores conectados");
                 }
-            } else {
-                console.warn("🚫 Frame recibido de cliente no autenticado o no tablet");
             }
             return;
         }
 
-        // 📡 Mensaje JSON: identificación o comandos táctiles
         let data;
         try {
             data = JSON.parse(message.toString());
         } catch (e) {
-            console.warn("❌ Mensaje no válido recibido.");
             return;
         }
 
@@ -55,28 +54,14 @@ wss.on('connection', (ws) => {
             clientId = data.tabletId;
             clientType = data.client;
 
-            console.log(`🆔 [IDENTIFY] ${clientType} con ID: ${clientId}`);
-
             if (clientType === 'tablet') {
-                // Autenticar la tablet
-                ws.send(JSON.stringify({ type: 'auth_success' }));
-
-                // Si ya existe una tablet con este ID, cierra la anterior
                 if (tablets.has(clientId)) {
-                    console.log("⚠️ Cerrando conexión previa de tablet...");
-                    tablets.get(clientId).close();
+                    tablets.get(clientId).terminate();
                 }
                 tablets.set(clientId, ws);
-
-                // Notificar a todos los visores que esta tablet está conectada
+                
                 const viewerSet = viewers.get(clientId);
-                if (viewerSet) {
-                    viewerSet.forEach((v) => {
-                        if (v.readyState === WebSocket.OPEN) {
-                            v.send(JSON.stringify({ type: 'tablet_connected' }));
-                        }
-                    });
-                }
+                viewerSet?.forEach((v) => v.send(JSON.stringify({ type: 'tablet_connected' })));
 
             } else if (clientType === 'viewer') {
                 if (!viewers.has(clientId)) {
@@ -84,56 +69,58 @@ wss.on('connection', (ws) => {
                 }
                 viewers.get(clientId).add(ws);
 
-                // Si ya hay una tablet conectada, notificar al visor
                 if (tablets.has(clientId)) {
                     ws.send(JSON.stringify({ type: 'tablet_connected' }));
+                } else {
+                    ws.send(JSON.stringify({ type: 'tablet_disconnected' }));
                 }
             }
         } else if (clientType === 'viewer') {
-            // Reenviar comandos táctiles a la tablet
             const tabletWs = tablets.get(clientId);
             if (tabletWs && tabletWs.readyState === WebSocket.OPEN) {
                 tabletWs.send(JSON.stringify(data));
-            } else {
-                console.warn("🚫 Comando ignorado: tablet desconectada");
             }
         }
     });
 
     ws.on('close', () => {
-        console.log(`🔌 Cliente desconectado: ${clientType} - ${clientId}`);
-
-        // Eliminar tablet
+        console.log(`Cliente desconectado: ${clientType} - ${clientId}`);
         if (clientType === 'tablet' && tablets.get(clientId) === ws) {
             tablets.delete(clientId);
-
-            // Notificar a visores que la tablet se desconectó
-            if (viewers.has(clientId)) {
-                viewers.get(clientId).forEach((v) => {
-                    if (v.readyState === WebSocket.OPEN) {
-                        v.send(JSON.stringify({ type: 'tablet_disconnected' }));
-                    }
-                });
-            }
+            const viewerSet = viewers.get(clientId);
+            viewerSet?.forEach((v) => v.send(JSON.stringify({ type: 'tablet_disconnected' })));
         }
-
-        // Eliminar visor
         if (clientType === 'viewer' && viewers.has(clientId)) {
             viewers.get(clientId).delete(ws);
             if (viewers.get(clientId).size === 0) {
                 viewers.delete(clientId);
             }
         }
+        clearInterval(pingInterval);
+    });
+
+    ws.on('error', (err) => {
+        console.error("Error de WebSocket:", err);
     });
 });
 
-// Ruta raíz
-app.get('/', (req, res) => {
-    res.send('✅ Servidor broker funcionando correctamente.');
+const pingInterval = setInterval(() => {
+    wss.clients.forEach((ws) => {
+        if (ws.isAlive === false) return ws.terminate();
+        ws.isAlive = false;
+        ws.ping();
+    });
+}, 30000);
+
+wss.on('close', () => {
+    clearInterval(pingInterval);
 });
 
-// Iniciar servidor
-const port = process.env.PORT || 19000;
+app.get('/', (req, res) => {
+    res.send('Servidor broker funcionando.');
+});
+
+const port = process.env.PORT || 10000;
 server.listen(port, () => {
-    console.log(`🚀 Servidor escuchando en el puerto ${port}`);
+    console.log(`Servidor escuchando en el puerto ${port}`);
 });
