@@ -9,7 +9,7 @@ const wss = new WebSocketServer({ server });
 const tablets = new Map();
 const viewers = new Map();
 
-console.log("Servidor Broker v3.0 (con Keep-Alive) listo.");
+console.log("Servidor Broker v3.1 (con Keep-Alive) listo.");
 
 wss.on('connection', (ws) => {
     let clientId = null;
@@ -39,15 +39,18 @@ wss.on('connection', (ws) => {
         try {
             data = JSON.parse(message.toString());
         } catch (e) {
+            console.log("Mensaje inválido (no JSON):", message.toString());
             return;
         }
 
         if (data.type === 'identify') {
             clientId = data.tabletId;
             clientType = data.client;
+            console.log(`Identificado: ${clientType} con ID ${clientId}`);
 
             if (clientType === 'tablet') {
                 if (tablets.has(clientId)) {
+                    console.log(`Cerrando conexión antigua para tablet ${clientId}`);
                     tablets.get(clientId).terminate();
                 }
                 tablets.set(clientId, ws);
@@ -114,7 +117,7 @@ wss.on('close', () => {
 });
 
 app.get('/', (req, res) => {
-    res.send('Servidor broker funcionando.');
+    res.send('Servidor broker funcionando correctamente.');
 });
 
 const port = process.env.PORT || 10000;
