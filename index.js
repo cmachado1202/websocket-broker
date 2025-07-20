@@ -3,45 +3,40 @@ const http = require('http');
 const { WebSocketServer } = require('ws');
 
 const app = express();
-// Creamos el servidor HTTP a partir de Express. Esto es crucial.
 const server = http.createServer(app);
-// El WebSocketServer se "adhiere" al servidor HTTP existente.
 const wss = new WebSocketServer({ noServer: true });
 
-const tablets = new Map();
-const viewers = new Map();
+// Estructura de datos final y robusta.
+// Clave: tabletId (ej: "7999dee...")
+// Valor: { tablet: WebSocket | null, viewer: WebSocket | null }
+const sessions = new Map();
 
-console.log("Servidor Broker v5.0 (con Upgrade Handler) listo.");
+console.log("Servidor Broker v7.0 (Producción) listo.");
 
-// --- SOLUCIÓN CLAVE: Manejar la actualización de protocolo HTTP a WebSocket ---
+// Manejador explícito para el upgrade de HTTP a WebSocket.
+// Esto es crucial para la compatibilidad con proxies como el de Render.
 server.on('upgrade', (request, socket, head) => {
-    console.log('Recibida petición de upgrade a WebSocket...');
-    
-    // Aquí podrías añadir lógica de autenticación si quisieras.
-    // Por ahora, aceptamos todas las conexiones.
-    
     wss.handleUpgrade(request, socket, head, (ws) => {
-        console.log('Upgrade a WebSocket exitoso. Disparando evento de conexión.');
         wss.emit('connection', ws, request);
     });
 });
 
-wss.on('connection', (ws, req) => {
-    let clientId = null;
+wss.on('connection', (ws) => {
+    console.log('Cliente conectado. Esperando identificación...');
+    let session = null;
     let clientRole = null;
-    ws.isAlive = true;
+    let clientId = null; // Guardamos el ID aquí también para los logs de cierre.
 
+    ws.isAlive = true;
     ws.on('pong', () => { ws.isAlive = true; });
 
-    console.log(`Cliente [${req.socket.remoteAddress}] conectado. Esperando identificación...`);
-
     ws.on('message', (message, isBinary) => {
-        // La librería 'ws' nos da un flag 'isBinary' que es más fiable.
+        // Si llegan datos de imagen (binarios), solo pueden venir de una tablet.
+        // Los reenviamos al visor de su sesión.
         if (isBinary) {
-            if (clientRole === 'tablet' && clientId) {
-                const viewerWs = viewers.get(clientId);
-                if (viewerWs && viewerWs.readyState === 1 /* OPEN */) {
-                    viewerWs.send(message, { binary: true });
+            if (clientRole === 'tablet' && session && session.viewer) {
+                if (session.viewer.readyState === 1 /* OPEN */) {
+                    session.viewer.send(message, { binary: true });
                 }
             }
             return;
@@ -51,67 +46,72 @@ wss.on('connection', (ws, req) => {
         try {
             data = JSON.parse(message.toString());
         } catch (e) {
-            console.log("Mensaje de texto inválido (no es JSON):", message.toString());
+            // Ignorar mensajes que no son JSON válidos
             return;
         }
 
-        console.log(`Mensaje JSON recibido de [${clientId || 'desconocido'}]:`, data);
-
-        if (data.type === 'identify') {
+        // Lógica de Identificación y Emparejamiento (Handshake)
+        if (data.type === 'identify' && data.id && data.role) {
             clientId = data.id;
             clientRole = data.role;
-            if (!clientId || !clientRole) {
-                ws.close(1011, "Identificación inválida.");
-                return;
-            }
-
             console.log(`--> Cliente identificado: rol='${clientRole}', id='${clientId}'`);
-            ws.clientId = clientId;
-            ws.clientRole = clientRole;
+
+            if (!sessions.has(clientId)) {
+                sessions.set(clientId, { tablet: null, viewer: null });
+            }
+            session = sessions.get(clientId);
 
             if (clientRole === 'tablet') {
-                if (tablets.has(clientId)) { tablets.get(clientId).terminate(); }
-                tablets.set(clientId, ws);
-                const viewerWs = viewers.get(clientId);
-                if (viewerWs) {
-                    viewerWs.send(JSON.stringify({ type: 'status', message: 'Tablet conectada. Esperando frames...' }));
+                if(session.tablet) session.tablet.terminate(); // Desconectar tablet antigua si la hubiera
+                session.tablet = ws;
+                if (session.viewer) {
+                    session.viewer.send(JSON.stringify({ type: 'status', message: 'Tablet conectada. ¡Iniciando streaming!' }));
                 }
             } else if (clientRole === 'viewer') {
-                if (viewers.has(clientId)) { viewers.get(clientId).terminate(); }
-                viewers.set(clientId, ws);
-                ws.send(JSON.stringify({ type: 'status', message: 'Identificado. Esperando a la tablet...' }));
-                if (tablets.has(clientId)) {
-                    ws.send(JSON.stringify({ type: 'status', message: 'Tablet conectada. Esperando frames...' }));
+                 if(session.viewer) session.viewer.terminate(); // Desconectar visor antiguo si lo hubiera
+                session.viewer = ws;
+                if (session.tablet) {
+                    session.viewer.send(JSON.stringify({ type: 'status', message: 'Tablet conectada. ¡Iniciando streaming!' }));
+                } else {
+                    session.viewer.send(JSON.stringify({ type: 'status', message: 'Identificado. Esperando a la tablet...' }));
                 }
             }
-        } else if (clientRole === 'viewer') {
-            const tabletWs = tablets.get(clientId);
-            if (tabletWs && tabletWs.readyState === 1 /* OPEN */) {
-                tabletWs.send(JSON.stringify(data));
+        } 
+        // Si el mensaje viene de un visor (y no es 'identify'), es un comando de control.
+        else if (clientRole === 'viewer' && session && session.tablet) {
+            if (session.tablet.readyState === 1 /* OPEN */) {
+                // Reenviamos el comando (tap/swipe) a la tablet de la sesión.
+                session.tablet.send(JSON.stringify(data));
             }
         }
     });
 
-    ws.on('close', (code, reason) => {
-        console.log(`Cliente [${clientId || 'desconocido'}] desconectado. Código: ${code}, Razón: ${reason.toString()}`);
-        if (clientRole === 'tablet' && tablets.get(clientId) === ws) {
-            tablets.delete(clientId);
-            const viewerWs = viewers.get(clientId);
-            if (viewerWs) {
-                viewerWs.send(JSON.stringify({ type: 'status', message: 'La tablet se ha desconectado.' }));
+    ws.on('close', () => {
+        console.log(`Cliente desconectado: rol='${clientRole}', id='${clientId}'`);
+        if (clientId && sessions.has(clientId)) {
+            const currentSession = sessions.get(clientId);
+            if (clientRole === 'tablet' && currentSession.viewer) {
+                currentSession.viewer.send(JSON.stringify({ type: 'status', message: 'La tablet se ha desconectado.' }));
+                currentSession.tablet = null;
             }
-        } else if (clientRole === 'viewer' && viewers.get(clientId) === ws) {
-            viewers.delete(clientId);
+            if (clientRole === 'viewer') {
+                currentSession.viewer = null;
+            }
+            // Si la sesión queda completamente vacía, la eliminamos del mapa.
+            if (!currentSession.tablet && !currentSession.viewer) {
+                sessions.delete(clientId);
+                console.log(`Sesión para [${clientId}] eliminada.`);
+            }
         }
     });
-    
-    ws.on('error', (error) => { console.error(`Error en WebSocket de [${clientId || 'desconocido'}]:`, error); });
+
+    ws.on('error', (error) => console.error(`Error de WebSocket para [${clientId}]:`, error));
 });
 
-// Sistema de Keep-Alive
+// Sistema de Keep-Alive para evitar desconexiones por inactividad
 const pingInterval = setInterval(() => {
     wss.clients.forEach((ws) => {
-        if (ws.isAlive === false) { ws.terminate(); return; }
+        if (ws.isAlive === false) return ws.terminate();
         ws.isAlive = false;
         ws.ping();
     });
