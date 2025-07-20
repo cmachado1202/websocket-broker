@@ -1,109 +1,101 @@
 const express = require('express');
 const http = require('http');
-const { WebSocket, WebSocketServer } = require('ws');
+const { WebSocketServer } = require('ws');
 
 const app = express();
+// Creamos el servidor HTTP a partir de Express. Esto es crucial.
 const server = http.createServer(app);
-const wss = new WebSocketServer({ server });
+// El WebSocketServer se "adhiere" al servidor HTTP existente.
+const wss = new WebSocketServer({ noServer: true });
 
 const tablets = new Map();
 const viewers = new Map();
 
-console.log("Servidor Broker v4.0 (Protocolo Unificado) listo.");
+console.log("Servidor Broker v5.0 (con Upgrade Handler) listo.");
 
-wss.on('connection', (ws) => {
+// --- SOLUCIÓN CLAVE: Manejar la actualización de protocolo HTTP a WebSocket ---
+server.on('upgrade', (request, socket, head) => {
+    console.log('Recibida petición de upgrade a WebSocket...');
+    
+    // Aquí podrías añadir lógica de autenticación si quisieras.
+    // Por ahora, aceptamos todas las conexiones.
+    
+    wss.handleUpgrade(request, socket, head, (ws) => {
+        console.log('Upgrade a WebSocket exitoso. Disparando evento de conexión.');
+        wss.emit('connection', ws, request);
+    });
+});
+
+wss.on('connection', (ws, req) => {
     let clientId = null;
-    let clientRole = null; // Usaremos 'role' para ser consistentes
+    let clientRole = null;
     ws.isAlive = true;
 
-    ws.on('pong', () => {
-        ws.isAlive = true;
-    });
+    ws.on('pong', () => { ws.isAlive = true; });
 
-    console.log("Cliente conectado. Esperando identificación...");
+    console.log(`Cliente [${req.socket.remoteAddress}] conectado. Esperando identificación...`);
 
-    ws.on('message', (message) => {
-        // Primero, manejamos los datos binarios (imágenes)
-        if (Buffer.isBuffer(message)) {
+    ws.on('message', (message, isBinary) => {
+        // La librería 'ws' nos da un flag 'isBinary' que es más fiable.
+        if (isBinary) {
             if (clientRole === 'tablet' && clientId) {
-                // Si el que envía es una tablet, reenviamos al visor correspondiente
                 const viewerWs = viewers.get(clientId);
-                if (viewerWs && viewerWs.readyState === WebSocket.OPEN) {
+                if (viewerWs && viewerWs.readyState === 1 /* OPEN */) {
                     viewerWs.send(message, { binary: true });
                 }
             }
             return;
         }
 
-        // Si no es binario, es un mensaje de control (JSON)
         let data;
         try {
             data = JSON.parse(message.toString());
         } catch (e) {
-            console.log("Mensaje inválido (no es JSON válido):", message.toString());
+            console.log("Mensaje de texto inválido (no es JSON):", message.toString());
             return;
         }
 
-        // --- LÓGICA DE IDENTIFICACIÓN CORREGIDA ---
+        console.log(`Mensaje JSON recibido de [${clientId || 'desconocido'}]:`, data);
+
         if (data.type === 'identify') {
-            // Buscamos las claves correctas: 'id' y 'role'
             clientId = data.id;
             clientRole = data.role;
-
             if (!clientId || !clientRole) {
-                console.error("Mensaje de identificación inválido, falta 'id' o 'role'. Desconectando cliente.");
                 ws.close(1011, "Identificación inválida.");
                 return;
             }
 
-            console.log(`Identificado: rol='${clientRole}', id='${clientId}'`);
-
-            // Adjuntamos la info al objeto ws para fácil acceso
+            console.log(`--> Cliente identificado: rol='${clientRole}', id='${clientId}'`);
             ws.clientId = clientId;
             ws.clientRole = clientRole;
 
             if (clientRole === 'tablet') {
-                if (tablets.has(clientId)) {
-                    console.log(`Cerrando conexión antigua para la tablet ${clientId}`);
-                    tablets.get(clientId).terminate();
-                }
+                if (tablets.has(clientId)) { tablets.get(clientId).terminate(); }
                 tablets.set(clientId, ws);
-                
-                // Avisamos al visor que la tablet ya está aquí
                 const viewerWs = viewers.get(clientId);
                 if (viewerWs) {
                     viewerWs.send(JSON.stringify({ type: 'status', message: 'Tablet conectada. Esperando frames...' }));
                 }
-
             } else if (clientRole === 'viewer') {
-                if (viewers.has(clientId)) {
-                     console.log(`Cerrando conexión antigua para el visor ${clientId}`);
-                     viewers.get(clientId).terminate();
-                }
+                if (viewers.has(clientId)) { viewers.get(clientId).terminate(); }
                 viewers.set(clientId, ws);
-
                 ws.send(JSON.stringify({ type: 'status', message: 'Identificado. Esperando a la tablet...' }));
-
-                // Si la tablet ya estaba conectada, avisamos al visor inmediatamente
                 if (tablets.has(clientId)) {
                     ws.send(JSON.stringify({ type: 'status', message: 'Tablet conectada. Esperando frames...' }));
                 }
             }
-        // Si el mensaje es de un visor y no es de identificación, es un comando de control
         } else if (clientRole === 'viewer') {
             const tabletWs = tablets.get(clientId);
-            if (tabletWs && tabletWs.readyState === WebSocket.OPEN) {
-                // Reenviamos el comando (tap, swipe, etc.) a la tablet
+            if (tabletWs && tabletWs.readyState === 1 /* OPEN */) {
                 tabletWs.send(JSON.stringify(data));
             }
         }
     });
 
-    ws.on('close', () => {
-        console.log(`Cliente desconectado: rol='${clientRole}', id='${clientId}'`);
+    ws.on('close', (code, reason) => {
+        console.log(`Cliente [${clientId || 'desconocido'}] desconectado. Código: ${code}, Razón: ${reason.toString()}`);
         if (clientRole === 'tablet' && tablets.get(clientId) === ws) {
             tablets.delete(clientId);
-            // Avisamos al visor que la tablet se desconectó
             const viewerWs = viewers.get(clientId);
             if (viewerWs) {
                 viewerWs.send(JSON.stringify({ type: 'status', message: 'La tablet se ha desconectado.' }));
@@ -112,32 +104,22 @@ wss.on('connection', (ws) => {
             viewers.delete(clientId);
         }
     });
-
-    ws.on('error', (err) => {
-        console.error("Error de WebSocket:", err);
-    });
+    
+    ws.on('error', (error) => { console.error(`Error en WebSocket de [${clientId || 'desconocido'}]:`, error); });
 });
 
-// Sistema de Keep-Alive para evitar desconexiones por inactividad
+// Sistema de Keep-Alive
 const pingInterval = setInterval(() => {
     wss.clients.forEach((ws) => {
-        if (ws.isAlive === false) {
-            console.log("Cliente inactivo (no respondió al ping), terminando conexión.");
-            return ws.terminate();
-        }
+        if (ws.isAlive === false) { ws.terminate(); return; }
         ws.isAlive = false;
         ws.ping();
     });
 }, 30000);
 
-wss.on('close', () => {
-    clearInterval(pingInterval);
-});
+wss.on('close', () => { clearInterval(pingInterval); });
 
-// Ruta básica para confirmar que el servidor HTTP está vivo
-app.get('/', (req, res) => {
-    res.send('Servidor WebSocket para control remoto está funcionando.');
-});
+app.get('/', (req, res) => { res.send('Servidor WebSocket para control remoto está funcionando.'); });
 
 const port = process.env.PORT || 10000;
 server.listen(port, () => {
